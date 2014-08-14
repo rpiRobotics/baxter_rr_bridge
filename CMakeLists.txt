@@ -12,7 +12,6 @@ find_package(catkin
   dynamic_reconfigure
   baxter_core_msgs
   baxter_interface
-  RobotRaconteur
 )
 
 catkin_python_setup()
@@ -28,7 +27,6 @@ catkin_package(
   dynamic_reconfigure
   baxter_core_msgs
   baxter_interface
-  RobotRaconteur
 )
 
 install(
