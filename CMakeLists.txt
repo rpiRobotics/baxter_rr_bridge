@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8.3)
-project(baxter_RR_bridge)
+project(baxter_rr_bridge)
 
 find_package(catkin
   REQUIRED
@@ -12,6 +12,7 @@ find_package(catkin
   dynamic_reconfigure
   baxter_core_msgs
   baxter_interface
+  RobotRaconteur
 )
 
 catkin_python_setup()
@@ -27,6 +28,7 @@ catkin_package(
   dynamic_reconfigure
   baxter_core_msgs
   baxter_interface
+  RobotRaconteur
 )
 
 install(

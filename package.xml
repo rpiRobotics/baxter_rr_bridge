@@ -1,12 +1,12 @@
 <?xml version="1.0"?>
 <package>
-  <name>baxter_RR_bridge</name>
+  <name>baxter_rr_bridge</name>
   <version>0.0.1</version>
-  <description>A package to bridge the ROS-based control interface for the Rethink Robotics Baxter robot to the Robot Raconteur middle</description>
+  <description>A package to bridge the ROS-based control interface for the Rethink Robotics Baxter robot to a Robot Raconteur middleware service</description>
 
   <maintainer email="daniel.kruse@gmail.edu">Daniel Kruse</maintainer>
   <license>BSD</license>
-  <url type="repository">https://github.com/ChopChopperDan/baxter_RR_bridge</url>
+  <url type="repository">https://github.com/ChopChopperDan/baxter_rr_bridge</url>
   <author email="daniel.kruse@gmail.edu">Daniel Kruse</author> 
   <buildtool_depend>catkin</buildtool_depend>
   
