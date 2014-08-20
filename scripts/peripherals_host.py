@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import roslib
-roslib.load_manifest('baxter_bridge')
+roslib.load_manifest('baxter_rr_bridge')
 import rospy
 import baxter_interface
 from sensor_msgs.msg import PointCloud
