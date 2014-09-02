@@ -149,7 +149,7 @@ class Baxter_impl(object):
             
     def readJointTorques(self):
         l_efforts = self._left.joint_efforts()
-        r_efforts = self._right.joint_angles()
+        r_efforts = self._right.joint_efforts()
         if l_efforts:
             for i in xrange(0,len(self._l_jnames)):
                 self._jointtor[i] = l_efforts[self._l_jnames[i]]
