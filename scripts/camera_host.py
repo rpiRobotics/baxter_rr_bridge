@@ -5,6 +5,7 @@ import rospy
 import baxter_interface
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import CameraInfo
+import time
 
 import sys, argparse
 import struct
@@ -14,6 +15,8 @@ import thread
 import threading
 import numpy
 import traceback
+import cv2
+import cv2.aruco as aruco
 
 baxter_servicedef="""
 #Service to provide simple interface to Baxter
@@ -39,6 +42,11 @@ struct ImageHeader
     field int32 step
 end struct
 
+struct ARtagInfo
+    field double[] tmats
+    field int32[] ids
+end struct
+
 object BaxterCamera
 
     property uint8 camera_open
@@ -50,11 +58,15 @@ object BaxterCamera
     function void setGain(int16 gain)
     function void setWhiteBalance(int16 red, int16 green, int16 blue)
     function void setFPS(double fps)
+    function void setCameraIntrinsics(CameraIntrinsics data)
+    function void setMarkerSize(double markerSize)
     
     # functions to acquire data on the image
     function BaxterImage getCurrentImage()
     function ImageHeader getImageHeader()
     function CameraIntrinsics getCameraIntrinsics()
+    function double getMarkerSize()
+    function ARtagInfo ARtag_Detection()
     
     # pipe to stream images through
     pipe BaxterImage ImageStream
@@ -65,14 +77,14 @@ end object
 class BaxterCamera_impl(object):
     def __init__(self, camera_name, mode, half_res):
         print "Initializing ROS Node"
-        rospy.init_node('baxter_cameras', anonymous=True)
+        rospy.init_node('baxter_cameras', anonymous = True)
         
         
         # Lock for multithreading
         self._lock = threading.RLock()
         
         # for image pipe
-        self._imagestream=None
+        self._imagestream = None
         self._imagestream_endpoints = dict()
         self._imagestream_endpoints_lock = threading.RLock()
         
@@ -81,7 +93,7 @@ class BaxterCamera_impl(object):
         self._camera_name = camera_name;
         
         # automatically close camera at start
-        self._camera.close()
+        # self._camera.close()
         self._camera_open = False
         
         # set constant ImageHeader structure
@@ -107,6 +119,11 @@ class BaxterCamera_impl(object):
         self._image.width = self._image_header.width
         self._image.height = self._image_header.height
         self._image.step = self._image_header.step
+
+        # Initialize ARtag detection
+        self._aruco_dict = aruco.Dictionary_get(aruco.DICT_ARUCO_ORIGINAL)
+        self._arucoParams = aruco.DetectorParameters_create()
+        self._markerSize = 0.085
         
     # open camera 
     def openCamera(self):
@@ -164,22 +181,32 @@ class BaxterCamera_impl(object):
                     except:
                         # on error, assume pipe has been closed
                         self.ImageStream_pipeclosed(pipe_ep)
-                        
     
-    def set_CameraIntrinsics(self,data):
+    def set_CameraIntrinsics(self, data):
         if (self._camera_intrinsics is None):
             print "Setting Camera Intrinsic Data"
             self._camera_intrinsics = RR.RobotRaconteurNode.s.NewStructure( 
-                                    "BaxterCamera_interface.CameraIntrinsics" )
+                                        "BaxterCamera_interface.CameraIntrinsics" )
             K = list(data.K)
             K[2] -= data.roi.x_offset;
             K[5] -= data.roi.y_offset;
             self._camera_intrinsics.K = tuple(K)
             self._camera_intrinsics.D = tuple(data.D)
             self._caminfo_sub.unregister()
-    
+
+    # The following function is to set camera parameters manually
+    def setCameraIntrinsics(self, data):
+        if (self._camera_intrinsics is None):
+            print "Setting Camera Intrinsic Data"
+        else:
+            print "Setting already exists. Overwriting now..."
+        K = list(data.K)
+        self._camera_intrinsics.K = tuple(K)
+        self._camera_intrinsics.D = tuple(data.D)
+        self._caminfo_sub.unregister()
+            
     def getCurrentImage(self):
-        with self._lock:
+        with self._lock:    
             return self._image
     
     def getImageHeader(self):
@@ -236,7 +263,97 @@ class BaxterCamera_impl(object):
             print 'fps must be positive and cannot exceed 30'
             return
         self._camera.fps = fps
-    
+
+    # Functions related to AR tags
+    # Marker size
+    def setMarkerSize(self, markerSize):
+        with self._lock:
+            self._markerSize = markerSize
+
+    def getMarkerSize(self):
+        with self._lock:
+            markerSize = self._markerSize
+            return markerSize
+
+    def ARtag_Detection(self):
+        if not self.camera_open:
+            self.openCamera()
+        print "Detecting AR tags..."
+        currentImage = self.getCurrentImage()
+        imageData = currentImage.data
+        imageData = numpy.reshape(imageData, (800, 1280, 4))
+        gray = cv2.cvtColor(imageData, cv2.COLOR_BGRA2GRAY)
+
+        corners, ids, rejected = aruco.detectMarkers(gray, self._aruco_dict, parameters=self._arucoParams) 
+
+        if ids is not None:
+            Tmat = []
+            IDS = []
+            detectioninfo = RR.RobotRaconteurNode.s.NewStructure("BaxterCamera_interface.ARtagInfo")
+            for anid in ids:
+                IDS.append(anid[0])
+            for corner in corners:
+                pc, Rc = self.getObjectPose(corner) 
+                Tmat.extend([   Rc[0][0],   Rc[1][0],   Rc[2][0],   0.0,
+                                Rc[0][1],   Rc[1][1],   Rc[2][1],   0.0,
+                                Rc[0][2],   Rc[1][2],   Rc[2][2],   0.0,
+                                pc[0],      pc[1],      pc[2],      1.0])
+
+            detectioninfo.tmats = Tmat
+            detectioninfo.ids = IDS
+            return detectioninfo
+
+    # function that AR tag detection uses
+    def getObjectPose(self, corners):
+        with self._lock:
+            camMatrix = numpy.reshape(self._camera_intrinsics.K, (3, 3))
+            
+            distCoeff = numpy.zeros((1, 5), dtype=numpy.float64)
+            distCoeff[0][0] = self._camera_intrinsics.D[0]
+            distCoeff[0][1] = self._camera_intrinsics.D[1]
+            distCoeff[0][2] = self._camera_intrinsics.D[2]
+            distCoeff[0][3] = self._camera_intrinsics.D[3]
+            distCoeff[0][4] = self._camera_intrinsics.D[4]
+
+            # print "cameramatrix: ", camMatrix
+            # print "distortion coefficient: ", distCoeff
+
+            # AR Tag Dimensions in object frame
+            objPoints = numpy.zeros((4, 3), dtype=numpy.float64)
+            # (-1, +1, 0)
+            objPoints[0,0] = -1*self._markerSize/2.0 # -1
+            objPoints[0,1] = 1*self._markerSize/2.0 # +1
+            objPoints[0,2] = 0.0
+            # (+1, +1, 0)
+            objPoints[1,0] = self._markerSize/2.0 # +1
+            objPoints[1,1] = self._markerSize/2.0 # +1
+            objPoints[1,2] = 0.0
+            # (+1, -1, 0)
+            objPoints[2,0] = self._markerSize/2.0 # +1
+            objPoints[2,1] = -1*self._markerSize/2.0 # -1
+            objPoints[2,2] = 0.0
+            # (-1, -1, 0)
+            objPoints[3,0] = -1*self._markerSize/2.0 # -1
+            objPoints[3,1] = -1*self._markerSize/2.0 # -1
+            objPoints[3,2] = 0.0
+
+            # Get each corner of the tags
+            imgPoints = numpy.zeros((4, 2), dtype=numpy.float64)
+            for i in range(4):
+                imgPoints[i, :] = corners[0, i, :]
+
+            # SolvePnP
+            retVal, rvec, tvec = cv2.solvePnP(objPoints, imgPoints, camMatrix, distCoeff)
+            Rca, b = cv2.Rodrigues(rvec)
+            Pca = tvec
+
+            # print "pca, rca: ", Pca, Rca
+
+            return [Pca, Rca]
+
+
+    ######################################
+
     # pipe functions
     @property
     def ImageStream(self):
