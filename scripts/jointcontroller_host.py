@@ -13,6 +13,19 @@ import thread
 import threading
 import numpy
 
+from geometry_msgs.msg import (
+    PoseStamped,
+    Pose,
+    Point,
+    Quaternion,
+)
+from std_msgs.msg import Header
+
+from baxter_core_msgs.srv import (
+    SolvePositionIK,
+    SolvePositionIKRequest,
+)
+
 baxter_servicedef="""
 #Service to provide simple interface to Baxter
 service BaxterJoint_Interface
@@ -31,6 +44,7 @@ property double[] endeffector_wrenches
 function void setControlMode(uint8 mode)
 function void setJointCommand(string limb, double[] command)
 function void setPositionModeSpeed(double speed)
+function double[] solveIKfast(double[] positions, double[] quaternions, string limb_choice)
 end object
 
 """
@@ -234,6 +248,127 @@ class Baxter_impl(object):
             self.setJointCommand('right',[0]*7)
         
         self._mode = mode
+
+    # This function calls RSDK ikFast Service
+    def solveIKfast(self, positions, quaternions, limb_choice):
+        ns = "ExternalTools/" + limb_choice + "/PositionKinematicsNode/IKService"
+        iksvc = rospy.ServiceProxy(ns, SolvePositionIK)
+        ikreq = SolvePositionIKRequest()
+        hdr = Header(stamp=rospy.Time.now(), frame_id='base')
+        poses = {}
+        if (limb_choice == 'left' or limb_choice == 'l'):
+            limb_choice = 'left'
+            poses = {
+                'left': PoseStamped(
+                    header=hdr,
+                    pose=Pose(
+                        position = Point(
+                            x = positions[0],
+                            y = positions[1],
+                            z = positions[2],
+                        ),
+                        orientation = Quaternion(
+                            x = quaternions[1],
+                            y = quaternions[2],
+                            z = quaternions[3],
+                            w = quaternions[0],
+                        ),
+                    ),
+                ),
+                'right': PoseStamped(
+                    header=hdr,
+                    pose=Pose(
+                        position = Point(
+                            x = self._ee_pos[3],
+                            y = self._ee_pos[4],
+                            z = self._ee_pos[5],
+                        ),
+                        orientation = Quaternion(
+                            x = self._ee_or[5],
+                            y = self._ee_or[6],
+                            z = self._ee_or[7],
+                            w = self._ee_or[4],
+                        ),
+                    ),
+                ),
+            }
+        elif (limb_choice == 'right' or limb_choice == 'r'):
+            limb_choice = 'right'
+            poses = {
+                'left': PoseStamped(
+                    header=hdr,
+                    pose=Pose(
+                        position = Point(
+                            x = self._ee_pos[0],
+                            y = self._ee_pos[1],
+                            z = self._ee_pos[2],
+                        ),
+                        orientation = Quaternion(
+                            x = self._ee_or[1],
+                            y = self._ee_or[2],
+                            z = self._ee_or[3],
+                            w = self._ee_or[0],
+                        ),
+                    ),
+                ),
+                'right': PoseStamped(
+                    header=hdr,
+                    pose=Pose(
+                        position = Point(
+                            x = positions[0],
+                            y = positions[1],
+                            z = positions[2],
+                        ),
+                        orientation = Quaternion(
+                            x = quaternions[1],
+                            y = quaternions[2],
+                            z = quaternions[3],
+                            w = quaternions[0],
+                        ),
+                    ),
+                ),
+            }
+        else:
+            print "Not a valid arm"
+            return 
+
+        # begin the solvinng process
+        ikreq.pose_stamp.append(poses[limb_choice])
+        try:
+            rospy.wait_for_service(ns, 5.0)
+            resp = iksvc(ikreq)
+        except (rospy.ServiceException, rospy.ROSException), e:
+            rospy.logerr("Service call failed: %s" % (e,))
+            return 1
+
+        # Check if result valid, and type of seed ultimately used to get solution
+        # convert rospy's string representation of uint8[]'s to int's
+        resp_seeds = struct.unpack('<%dB' % len(resp.result_type),
+                                   resp.result_type)
+
+        seed_dict = {
+                        ikreq.SEED_USER: 'User Provided Seed',
+                        ikreq.SEED_CURRENT: 'Current Joint Angles',
+                        ikreq.SEED_NS_MAP: 'Nullspace Setpoints',
+                    }
+
+        if (resp_seeds[0] != resp.RESULT_INVALID):
+            seed_str = seed_dict.get(resp_seeds[0], 'None')
+            print("SUCCESS - Valid Joint Solution Found from Seed Type: %s" %
+                  (seed_str,))
+
+            # Format solution into Limb API-compatible dictionary
+            limb_joints = dict(zip(resp.joints[0].name, resp.joints[0].position))
+            print "\nIK Joint Solution:\n", limb_joints
+            print "------------------"
+            print "Response Message:\n", resp
+        # if no valid solution was found
+        else:
+            print("INVALID POSE - No Valid Joint Solution Found.")
+
+        return resp.joints[0].position
+
+
 
     def setJointCommand(self, limb, command):
         limb = limb.lower()
