@@ -8,6 +8,7 @@ from sensor_msgs.msg import Imu
 from std_msgs.msg import UInt16
 from std_msgs.msg import Empty
 from baxter_core_msgs.msg import SEAJointState
+import tf
 
 import sys, argparse
 import struct
@@ -37,6 +38,11 @@ struct SonarPointCloud
     field single[] sensors
     field single[] distances
     field single[] points
+end struct
+
+struct framePose
+    field double[] position
+    field double[] quaternion
 end struct
 
 object BaxterPeripherals
@@ -74,6 +80,8 @@ property double[] gravity_compensation_torques
 
 function NavigatorState getNavigatorState(string navigator)
 function void setNavigatorLEDs(string navigator, uint8 inner_led, uint8 outer_led)
+
+function framePose lookUptransforms(string target_frame, string source_frame)
 
 end object
 
@@ -205,6 +213,9 @@ class BaxterPeripherals_impl(object):
                                 baxter_interface.Navigator('torso_left'), 
                             'torso_right': 
                                 baxter_interface.Navigator('torso_right')}
+
+        # initialize frame transform 
+        self._listener = tf.TransformListener()
    
     def close(self):
         self._running = False
@@ -466,8 +477,14 @@ class BaxterPeripherals_impl(object):
         if (navigator in self._navigators.keys()):
             self._navigators[navigator].inner_led = (inner_led > 0)
             self._navigators[navigator].outer_led = (outer_led > 0)
-        
-                
+
+    def lookUptransforms(self, target_frame, source_frame):
+        position, quaternion = self._listener.lookupTransform(target_frame, source_frame, rospy.Time(0))
+        relativePose = RR.RobotRaconteurNode.s.NewStructure( 
+                          'BaxterPeripheral_interface.framePose' )
+        relativePose.position = list(position)
+        relativePose.quaternion = list(quaternion)
+        return relativePose
     
 
 def main(argv):
